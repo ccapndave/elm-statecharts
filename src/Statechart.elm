@@ -1,6 +1,8 @@
-module Statecharts exposing
+module Statechart exposing
   ( Statechart
   , StateModel
+  , decoder
+  , encode
   , mkStatechart
   , mkCompoundState
   , mkState
@@ -10,10 +12,13 @@ module Statecharts exposing
   , step
   )
 
-{-| Convenience functions for working with updates in Elm
+{-| A pure Elm implementation of statecharts designed to hook direct;y into The Elm Architecture
+update function.
 
 @docs Statechart
 @docs StateModel
+@docs decoder
+@docs encode
 @docs mkStatechart
 @docs mkCompoundState
 @docs mkState
@@ -26,6 +31,8 @@ module Statecharts exposing
 import Json.Encode as JE exposing (Value)
 import Json.Decode as JD exposing (Decoder, field)
 import Json.Decode.Pipeline exposing (decode, required, optional, hardcoded, custom)
+import Json.Decode.Extra
+import Json.Encode.Extra
 import Update.Extra as Update
 import Dict exposing (Dict)
 import Tree exposing (Tree, singleton)
@@ -83,11 +90,24 @@ type alias StateModel =
   }
 
 
+{-| Decode a stored StateModel.
+-}
+decoder : Statechart msg model -> Decoder StateModel
+decoder statechart =
+  decode StateModel
+    |> required "currentStateName" JD.string
+    |> required "targetStateName" JD.string
+    |> required "history" (JD.dict JD.string)
+
+
+{-| Encode the StateModel into a value ready to be stored in the main model.
+-}
 encode : StateModel -> Value
 encode model =
   JE.object
     [ ("currentStateName", JE.string model.currentStateName)
     , ("targetStateName", JE.string model.targetStateName)
+    , ("history", Json.Encode.Extra.dict identity JE.string model.history)
     ]
 
 
@@ -104,7 +124,7 @@ mkStatechart startingState states =
     , hasHistory = False
     }
     states
-                                                                                                                                                                                                                                                                                                                                                                                             
+
 
 {-| Make a compound state from a StateConfig
 -}
@@ -127,7 +147,7 @@ noAction model =
   (model, [])
 
 
-{-|
+{-| An empty StateModel; this is the initial value in the model.
 -}
 empty : StateModel
 empty =
@@ -137,14 +157,31 @@ empty =
   }
 
 
-{-| Start the statechart; since the top level is always a compound state we can just call moveToTarget
+{-| Start the statechart based on the StateModel.
 -}
 start : Config msg model -> (model, Cmd msg) -> (model, Cmd msg)
-start config init =
-  moveTowardsTarget config init
+start ({ statechart, update, getStateModel, updateStateModel } as config) ((model, cmd) as init) =
+  let
+    -- Get the current state from the model
+    currentState : Zipper msg model
+    currentState =
+      unsafeFindState ((getStateModel >> .currentStateName) model) statechart
+    
+    -- Get the target state from the model
+    targetState : Zipper msg model
+    targetState =
+      unsafeFindState ((getStateModel >> .targetStateName) model) statechart
+  in
+  if currentState == targetState && List.isEmpty (children currentState) then
+    -- This is a special case where we are already starting in a node (which has no children).  In this case we need to run onEnter.
+    init
+      |> applyAction update ((label >> onEnter) currentState)
+  else
+    -- Otherwise start moving towards the target
+    moveTowardsTarget config init
 
 
-{-| Step through the statechart based on an incoming message
+{-| Step through the statechart in response to an incoming message.
 -}
 step : Config msg model -> msg -> (model, Cmd msg) -> (model, Cmd msg)
 step ({ statechart, update, getStateModel, updateStateModel } as config) msg ((model, cmd) as init) =
@@ -235,7 +272,7 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
               |> Maybe.map (\state ->
                 { beforeAction = sequenceActions
                   [ writeHistoryAction currentState state
-                  , (label >> onExit) state
+                  , (label >> onExit) currentState
                   ]
                 , nextState = state
                 , targetState = targetState
@@ -249,14 +286,14 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
         -- Apply the before action (this will be an onExit if we are moving up the tree)
         |> applyAction update beforeAction
         -- Log the transition we are about to do
-        -- |> \x -> let _ = Debug.log "State transition" (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState)) in x
+        |> \x -> let _ = Debug.log "State transition" (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState)) in x
         -- Update the model with the new nextState and targetState
         |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState, targetStateName = (label >> name) targetState }))
         -- Apply the after action (this will be an onEnter if we are moving down the tree)
         |> applyAction update afterAction
         -- Continue moving towards the target by recursing back into this function
         |> moveTowardsTarget config
-    
+
     Nothing ->
       init
 
@@ -307,7 +344,7 @@ getTransitionState msg model statechart state =
   case ((label >> transition) state) msg model of
     Just name ->
       Just <| unsafeFindState name statechart
-    
+
     Nothing ->
       state
         |> parent
@@ -334,7 +371,7 @@ composeActions g f =
     let
       (fM, fMsgs) =
         f m
-      
+
       (gM, gMsgs) =
         g fM
     in

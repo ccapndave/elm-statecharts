@@ -3,7 +3,8 @@ module Tests exposing (..)
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
 import Test exposing (..)
-import Statecharts exposing (..)
+import Statechart exposing (..)
+import Dict
 
 
 type Msg
@@ -88,30 +89,6 @@ hierarchicalStatechart =
       [ stopped, running ]
   in  
   mkStatechart stateNames.active [ active ]
-
-
-onEnterStatechart : Statechart Msg StateModel
-onEnterStatechart =
-  let
-    stopped = mkState
-      { name = stateNames.stopped
-      , onEnter = \m -> (m, [ StartStop ]) -- this stopwatch should start running automatically
-      , onExit = noAction
-      , transition = \msg _ -> case msg of
-        StartStop -> Just stateNames.running
-        otherwise -> Nothing
-      }
-
-    running = mkState
-      { name = stateNames.running
-      , onEnter = noAction
-      , onExit = noAction
-      , transition = \msg _ -> case msg of
-        StartStop -> Just stateNames.stopped
-        otherwise -> Nothing
-      } 
-  in  
-  mkStatechart stateNames.stopped [ stopped, running ]
 
 
 historyStatechart : Statechart Msg StateModel
@@ -242,17 +219,68 @@ suite =
         Expect.equal model.currentStateName stateNames.stopped
       ]
     
-    , describe "onEnter changing state"
-      [ test "Starting state" <| \_ ->
+    , describe "Actions" <|
+      let
+        addOneAction model =
+          ({ model | a = model.a + 1 }, [])
+
+        actionStatechart : Statechart Msg { a : Int, stateModel : StateModel }
+        actionStatechart =
+          let
+            stopped = mkState
+              { name = stateNames.stopped
+              , onEnter = \m -> (m, [ StartStop ]) -- this stopwatch should start running automatically
+              , onExit = addOneAction
+              , transition = \msg _ -> case msg of
+                StartStop -> Just stateNames.running
+                otherwise -> Nothing
+              }
+
+            running = mkState
+              { name = stateNames.running
+              , onEnter = addOneAction
+              , onExit = noAction
+              , transition = \msg _ -> case msg of
+                StartStop -> Just stateNames.stopped
+                otherwise -> Nothing
+              }
+          in  
+          mkStatechart stateNames.stopped [ stopped, running ]
+
+        actionConfig =
+          { statechart = actionStatechart
+          , update = \msg model -> step actionConfig msg (model, Cmd.none)
+          , getStateModel = .stateModel
+          , updateStateModel = \f m -> { m | stateModel = f m.stateModel }
+          }
+      in
+      [ test "onEnter" <| \_ ->
         let
           (model, cmd) =
-            empty ! []
-              |> start (config onEnterStatechart)
+            { a = 0, stateModel = empty } ! []
+              |> start actionConfig
         in
-        Expect.equal model.currentStateName stateNames.running
+        Expect.equal model.stateModel.currentStateName stateNames.running
+      
+      , test "onExit" <| \_ ->
+        let
+          (model, cmd) =
+            { a = 1, stateModel = empty } ! []
+              |> start actionConfig
+        in
+        Expect.equal model.a 3
+      
+      , test "Start onEnter action" <| \_ ->
+        let
+          -- Make sure that starting in a state causes its onEnter to be fired
+          (model, cmd) =
+            { a = 0, stateModel = { currentStateName = stateNames.running, targetStateName = stateNames.running, history = Dict.empty } } ! []
+              |> start actionConfig
+        in
+        Expect.equal model.a 1
       ]
     
-    , describe "history"
+    , describe "History"
       [ test "Starting state" <| \_ ->
         let
           (model, cmd) =
