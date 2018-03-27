@@ -256,7 +256,7 @@ suite =
         Expect.equal model.currentStateName stateNames.stopped
       ]
 
-    , only <| describe "Very hierarchical"
+    , describe "Very hierarchical"
         [ test "Starting state" <| \_ ->
           let
             (model, cmd) =
@@ -316,15 +316,6 @@ suite =
               |> start actionConfig
         in
         Expect.equal model.a 3
-      
-      , test "Start onEnter action" <| \_ ->
-        let
-          -- Make sure that starting in a state causes its onEnter to be fired
-          (model, cmd) =
-            { a = 0, stateModel = { currentStateName = stateNames.running, targetStateName = stateNames.running, history = Dict.empty } } ! []
-              |> start actionConfig
-        in
-        Expect.equal model.a 1
       ]
     
     , describe "History"

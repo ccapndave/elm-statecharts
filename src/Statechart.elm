@@ -31,7 +31,6 @@ update function.
 import Json.Encode as JE exposing (Value)
 import Json.Decode as JD exposing (Decoder, field)
 import Json.Decode.Pipeline exposing (decode, required, optional, hardcoded, custom)
-import Json.Decode.Extra
 import Json.Encode.Extra
 import Update.Extra as Update
 import Dict exposing (Dict)
@@ -158,27 +157,26 @@ empty =
 
 
 {-| Start the statechart based on the StateModel.
+TODO: the problem here is that if the starting state has no children then onEnter doesn't get run
 -}
 start : Config msg model -> (model, Cmd msg) -> (model, Cmd msg)
 start ({ statechart, update, getStateModel, updateStateModel } as config) ((model, cmd) as init) =
   let
-    -- Get the current state from the model
-    currentState : Zipper msg model
-    currentState =
-      unsafeFindState ((getStateModel >> .currentStateName) model) statechart
+    startingStateName =
+      case Tree.label statechart of
+        BranchStateConfig { startingState } -> startingState
+        otherwise -> Debug.crash "This can't happen"
     
-    -- Get the target state from the model
-    targetState : Zipper msg model
-    targetState =
-      unsafeFindState ((getStateModel >> .targetStateName) model) statechart
+    startingState =
+      unsafeFindState startingStateName statechart
   in
-  if currentState == targetState && List.isEmpty (children currentState) then
-    -- This is a special case where we are already starting in a node (which has no children).  In this case we need to run onEnter.
-    init
-      |> applyAction update ((label >> onEnter) currentState)
-  else
-    -- Otherwise start moving towards the target
-    moveTowardsTarget config init
+  init
+    -- Update the model with the startingState
+    |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
+    -- In case the startingState isn't a compound state, we need to manually run any onEnter
+    |> \init -> if (List.isEmpty (children startingState)) then applyAction update ((label >> onEnter) startingState) init else init
+    -- Kick off the state machine
+    |> moveTowardsTarget config
 
 
 {-| Step through the statechart in response to an incoming message.
