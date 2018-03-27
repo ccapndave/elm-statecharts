@@ -145,6 +145,43 @@ historyStatechart =
   mkStatechart stateNames.off [ on, off ]
 
 
+veryHierarchicalStatechart : Statechart Msg StateModel
+veryHierarchicalStatechart =
+  let
+    a =
+      let
+        b =
+          let
+            c = mkState
+              { name = stateNames.c
+              , onEnter = noAction
+              , onExit = noAction
+              , transition = \_ _ -> Nothing
+              }
+          in
+          mkCompoundState
+            { name = stateNames.b
+            , onEnter = noAction
+            , onExit = noAction
+            , startingState = stateNames.c
+            , transition = \_ _ -> Nothing
+            , hasHistory = False
+            }
+            [ c ]
+      in
+      mkCompoundState
+        { name = stateNames.a
+        , onEnter = noAction
+        , onExit = noAction
+        , startingState = stateNames.b
+        , transition = \_ _ -> Nothing
+        , hasHistory = False
+        }
+        [ b ]
+  in
+  mkStatechart stateNames.a [a]
+
+
 config statechart =
   { statechart = statechart
   , update = \msg model -> step (config statechart) msg (model, Cmd.none)
@@ -218,7 +255,17 @@ suite =
         in
         Expect.equal model.currentStateName stateNames.stopped
       ]
-    
+
+    , only <| describe "Very hierarchical"
+        [ test "Starting state" <| \_ ->
+          let
+            (model, cmd) =
+              empty ! []
+                |> start (config veryHierarchicalStatechart)
+          in
+          Expect.equal model.currentStateName stateNames.c
+        ]
+
     , describe "Actions" <|
       let
         addOneAction model =
