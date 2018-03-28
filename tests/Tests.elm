@@ -28,6 +28,8 @@ stateNames =
   , c = "C"
   , on = "ON"
   , off = "OFF"
+  
+  , top = "TOP"
   }
 
 
@@ -387,5 +389,87 @@ suite =
               |> step (config historyStatechart) On
         in
         Expect.equal model.currentStateName stateNames.a
+      
+      , test "Starting history" <| \_ ->
+        let
+          startHistoryStatechart : Statechart Msg StateModel
+          startHistoryStatechart =
+            let
+              top =
+                let
+                  on = 
+                    let
+                      a = mkState
+                        { name = stateNames.a
+                        , onEnter = noAction
+                        , onExit = noAction
+                        , transition = \msg _ -> case msg of
+                          Next -> Just stateNames.b
+                          otherwise -> Nothing
+                        }
+
+                      b = mkState
+                        { name = stateNames.b
+                        , onEnter = noAction
+                        , onExit = noAction
+                        , transition = \msg _ -> case msg of
+                          Next -> Just stateNames.c
+                          otherwise -> Nothing
+                        }
+
+                      c = mkState
+                        { name = stateNames.c
+                        , onEnter = noAction
+                        , onExit = noAction
+                        , transition = \msg _ -> case msg of
+                          Next -> Just stateNames.a
+                          otherwise -> Nothing
+                        }
+                    in
+                    mkCompoundState
+                      { name = stateNames.on
+                      , onEnter = noAction
+                      , onExit = noAction
+                      , transition = \msg _ -> case msg of
+                        Off -> Just stateNames.off
+                        otherwise -> Nothing
+                      , startingState = stateNames.a
+                      , hasHistory = True
+                      }
+                    [ a, b, c ]
+                  
+                  off = mkState
+                    { name = stateNames.off
+                    , onEnter = noAction
+                    , onExit = noAction
+                    , transition = \msg _ -> case msg of
+                      On -> Just stateNames.on
+                      otherwise -> Nothing
+                    }
+                in
+                mkCompoundState
+                  { name = stateNames.top
+                  , onEnter = noAction
+                  , onExit = noAction
+                  , transition = \msg _ -> case msg of
+                    Off -> Just stateNames.off
+                    otherwise -> Nothing
+                  , startingState = stateNames.off
+                  , hasHistory = True
+                  }
+                  [ on, off ] 
+            in
+            mkStatechart stateNames.top [ top ]
+          
+          (model, cmd) =
+            empty ! []
+              |> start (config startHistoryStatechart)
+              |> step (config startHistoryStatechart) On
+              |> step (config startHistoryStatechart) Next
+              |> step (config startHistoryStatechart) Next
+              -- This should follow the history and end up back in the same state
+              |> start (config startHistoryStatechart)
+        in
+        Expect.equal model.currentStateName stateNames.c
       ]
     ]

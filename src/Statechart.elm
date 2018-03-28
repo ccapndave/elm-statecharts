@@ -129,7 +129,18 @@ mkStatechart startingState states =
 -}
 mkCompoundState : BranchStateConfig msg model -> List (Statechart msg model) -> Statechart msg model
 mkCompoundState branchStateConfig states =
-  Tree.tree (BranchStateConfig branchStateConfig) states
+  let
+    -- We can do a little runtime check here to confirm that the starting state is a child of states
+    isStartingStateChild =
+      states
+        |> List.map (Tree.label >> name)
+        |> List.filter ((==) branchStateConfig.startingState)
+        |> not << List.isEmpty
+  in
+  if isStartingStateChild then
+    Tree.tree (BranchStateConfig branchStateConfig) states
+  else
+    Debug.crash <| "The starting state '" ++ branchStateConfig.startingState ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
 
 
 {-| Make a state from a StateConfig
@@ -157,7 +168,6 @@ empty =
 
 
 {-| Start the statechart based on the StateModel.
-TODO: the problem here is that if the starting state has no children then onEnter doesn't get run
 -}
 start : Config msg model -> (model, Cmd msg) -> (model, Cmd msg)
 start ({ statechart, update, getStateModel, updateStateModel } as config) ((model, cmd) as init) =
@@ -173,7 +183,7 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) ((mode
   init
     -- Update the model with the startingState
     |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
-    -- In case the startingState isn't a compound state, we need to manually run any onEnter
+    -- In case the startingState isn't a compound state, we need to manually run any onEnter actions
     |> \init -> if (List.isEmpty (children startingState)) then applyAction update ((label >> onEnter) startingState) init else init
     -- Kick off the state machine
     |> moveTowardsTarget config
@@ -245,19 +255,10 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
           else
             Just targetState
         )
-
+        
         |> Maybe.andThen (\targetState ->
           if contains (tree targetState) (tree currentState) then
             -- We need to move one step down the tree (towards the target) and run the target's onEnter
-            firstChild currentState
-              |> Maybe.andThen (findSiblingContainingChild targetState)
-              |> Maybe.map (\state ->
-                { beforeAction = noAction
-                , nextState = state
-                , targetState = targetState
-                , afterAction = (label >> onEnter) state
-                })
-          else
             let
               writeHistoryAction : Zipper msg model -> Zipper msg model -> Action msg model
               writeHistoryAction currentState parentState model =
@@ -265,12 +266,23 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                 , []
                 )
             in
+            firstChild currentState
+              |> Maybe.andThen (findSiblingContainingChild targetState)
+              |> Maybe.map (\state ->
+                { beforeAction = noAction
+                , nextState = state
+                , targetState = targetState
+                , afterAction = sequenceActions
+                  [ writeHistoryAction state currentState
+                  , (label >> onEnter) state
+                  ]
+                })
+          else
             -- We need to move one step up the tree and run the current node's onExit
             parent currentState
               |> Maybe.map (\state ->
                 { beforeAction = sequenceActions
-                  [ writeHistoryAction currentState state
-                  , (label >> onExit) currentState
+                  [ (label >> onExit) currentState
                   ]
                 , nextState = state
                 , targetState = targetState
