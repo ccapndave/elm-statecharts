@@ -319,6 +319,48 @@ suite =
         in
         Expect.equal model.a 3
       ]
+  
+    , describe "Self transitions" <|
+      let
+        actionStatechart : Statechart Msg { enters : Int, exits : Int, stateModel : StateModel }
+        actionStatechart =
+          let
+            stopped = mkState
+              { name = stateNames.stopped
+              , onEnter = \model -> ({ model | enters = model.enters + 1 }, [])
+              , onExit = \model -> ({ model | exits = model.exits + 1 }, [])
+              , transition = \msg _ -> case msg of
+                Reset -> Just stateNames.stopped
+                otherwise -> Nothing
+              }
+          in
+          mkStatechart stateNames.stopped [ stopped ]
+
+        actionConfig =
+          { statechart = actionStatechart
+          , update = \msg model -> step actionConfig msg (model, Cmd.none)
+          , getStateModel = .stateModel
+          , updateStateModel = \f m -> { m | stateModel = f m.stateModel }
+          }
+      in
+      [ test "self transition" <| \_ ->
+        let
+          (model, cmd) =
+            { enters = 0, exits = 0, stateModel = empty } ! []
+              |> start actionConfig
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+              |> step actionConfig Reset
+        in
+        Expect.equal { enters = model.enters, exits = model.exits } { enters = 10, exits = 9 }
+      ]
+      
     
     , describe "History"
       [ test "Starting state" <| \_ ->

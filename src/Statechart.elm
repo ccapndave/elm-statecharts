@@ -199,15 +199,19 @@ step ({ statechart, update, getStateModel, updateStateModel } as config) msg ((m
     currentState =
       unsafeFindState ((getStateModel >> .currentStateName) model) statechart
 
-    -- Find the next state using the transition functions
-    targetState : Zipper msg model
-    targetState =
+    -- Find the next state using the transition functions, if there is one
+    maybeTargetState : Maybe (Zipper msg model)
+    maybeTargetState =
       getTransitionState msg model statechart currentState
-        |> Maybe.withDefault currentState
+    
+    isSelfTransition : Bool
+    isSelfTransition =
+      maybeTargetState == (Just currentState)
   in
   init
+    |> (\i -> if isSelfTransition then moveToParent config i else i)
     -- Update the model with the new targetState
-    |> Update.updateModel (updateStateModel (\m -> { m | targetStateName = (label >> name) targetState }))
+    |> Update.updateModel (updateStateModel (\m -> { m | targetStateName = maybeTargetState |> Maybe.withDefault currentState |> (label >> name) }))
     -- Move to the target
     |> moveTowardsTarget config
 
@@ -303,6 +307,39 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
         |> applyAction update afterAction
         -- Continue moving towards the target by recursing back into this function
         |> moveTowardsTarget config
+
+    Nothing ->
+      init
+
+
+{-| Move one node up the hierarchy updating the model and running any exit action (this is used in self-transitions)
+-}
+moveToParent : Config msg model -> (model, Cmd msg) -> (model, Cmd msg)
+moveToParent ({ statechart, update, getStateModel, updateStateModel } as config) ((model, cmd) as init) =
+  let
+    -- Get the current state from the model
+    currentState : Zipper msg model
+    currentState =
+      unsafeFindState ((getStateModel >> .currentStateName) model) statechart
+
+    result =
+      parent currentState
+        |> Maybe.map (\state ->
+          { beforeAction = sequenceActions
+            [ (label >> onExit) currentState
+            ]
+          , nextState = state
+          })
+  in
+  case result of
+    Just { beforeAction, nextState } ->
+      init
+        -- Apply the before action (this will be an onExit if we are moving up the tree)
+        |> applyAction update beforeAction
+        -- Log the transition we are about to do
+        |> \x -> let _ = Debug.log "State transition (moveToParent) " (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState)) in x
+        -- Update the model with the new nextState and targetState
+        |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState }))
 
     Nothing ->
       init

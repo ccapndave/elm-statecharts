@@ -1,5 +1,5 @@
 {
-    "version": "1.0.1",
+    "version": "1.0.2",
     "summary": "Hierarchical statecharts for Elm",
     "repository": "https://github.com/ccapndave/elm-statecharts.git",
     "license": "BSD3",
