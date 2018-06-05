@@ -91,8 +91,8 @@ type alias StateModel =
 
 {-| Decode a stored StateModel.
 -}
-decoder : Statechart msg model -> Decoder StateModel
-decoder statechart =
+decoder : Decoder StateModel
+decoder =
   decode StateModel
     |> required "currentStateName" JD.string
     |> required "targetStateName" JD.string
@@ -176,7 +176,7 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) ((mode
       case Tree.label statechart of
         BranchStateConfig { startingState } -> startingState
         otherwise -> Debug.crash "This can't happen"
-    
+
     startingState =
       unsafeFindState startingStateName statechart
   in
@@ -203,7 +203,7 @@ step ({ statechart, update, getStateModel, updateStateModel } as config) msg ((m
     maybeTargetState : Maybe (Zipper msg model)
     maybeTargetState =
       getTransitionState msg model statechart currentState
-    
+
     isSelfTransition : Bool
     isSelfTransition =
       maybeTargetState == (Just currentState)
@@ -259,7 +259,7 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
           else
             Just targetState
         )
-        
+
         |> Maybe.andThen (\targetState ->
           if contains (tree targetState) (tree currentState) then
             -- We need to move one step down the tree (towards the target) and run the target's onEnter
