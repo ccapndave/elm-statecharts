@@ -33,6 +33,7 @@ import Json.Decode as JD exposing (Decoder, field)
 import Json.Decode.Pipeline exposing (decode, required, optional, hardcoded, custom)
 import Json.Encode.Extra
 import Update.Extra as Update
+import Maybe.Extra as Maybe
 import Dict exposing (Dict)
 import Tree exposing (Tree, singleton)
 import Tree.Zipper exposing (fromTree, tree, findFromRoot, label, parent, children, firstChild, nextSibling)
@@ -242,21 +243,28 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                 |> (\state -> case label state of
                   BranchStateConfig config ->
                     let
-                      -- When choosing a start state, we either get it from history, from a local transition or from the default starting state
-                      actualStartingState =
+                      -- Choosing a starting state uses the following algorithm:
+                      --  - a local transition always takes priority
+                      --  - otherwise we get the starting state from history, if it is on and there is a stored state
+                      --  - otherwise we use the default defined in the statechart
+                      stateNameToStartIn =
                         maybeMsg
+                          -- first try local transition, disallowed transitions back to the same state
                           |> Maybe.andThen (\msg -> getTransitionState msg model statechart state)
                           |> Maybe.map (label >> name)
-                          |> Maybe.andThen (\transitionStateName -> if transitionStateName == config.name then Nothing else Just transitionStateName) -- Don't allow self-transitions when choosing a child
-                          |> Maybe.withDefault config.startingState
+                          |> Maybe.andThen (\transitionStateName -> if transitionStateName == config.name then Nothing else Just transitionStateName)
 
-                      stateNameToStartIn =
-                        if config.hasHistory then
-                          (getStateModel >> .history) model
-                            |> Dict.get config.name
-                            |> Maybe.withDefault actualStartingState
-                        else
-                          actualStartingState
+                          -- then try history
+                          |> Maybe.or (
+                              if config.hasHistory then
+                                (getStateModel >> .history) model
+                                  |> Dict.get config.name
+                              else
+                                Nothing
+                             )
+
+                          -- finally fall back to the default starting states
+                          |> Maybe.withDefault config.startingState
                     in
                     Just <| unsafeFindState stateNameToStartIn statechart
 
