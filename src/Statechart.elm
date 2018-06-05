@@ -46,7 +46,7 @@ type alias Zipper msg model = Tree.Zipper.Zipper (StateConfig msg model)
 
 
 type alias Action msg model =
-  model -> (model, List msg)
+  Maybe msg -> model -> (model, List msg)
 
 
 type alias BaseStateConfig msg model a =
@@ -153,7 +153,7 @@ mkState leafStateConfig =
 {-| The identity action that does nothing
 -}
 noAction : Action model msg
-noAction model =
+noAction msg model =
   (model, [])
 
 
@@ -184,9 +184,9 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) ((mode
     -- Update the model with the startingState
     |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
     -- In case the startingState isn't a compound state, we need to manually run any onEnter actions
-    |> \init -> if (List.isEmpty (children startingState)) then applyAction update ((label >> onEnter) startingState) init else init
+    |> \init -> if (List.isEmpty (children startingState)) then applyAction update ((label >> onEnter) startingState) Nothing init else init
     -- Kick off the state machine
-    |> moveTowardsTarget config
+    |> moveTowardsTarget config Nothing
 
 
 {-| Step through the statechart in response to an incoming message.
@@ -209,17 +209,17 @@ step ({ statechart, update, getStateModel, updateStateModel } as config) msg ((m
       maybeTargetState == (Just currentState)
   in
   init
-    |> (\i -> if isSelfTransition then moveToParent config i else i)
+    |> (\i -> if isSelfTransition then moveToParent config msg i else i)
     -- Update the model with the new targetState
     |> Update.updateModel (updateStateModel (\m -> { m | targetStateName = maybeTargetState |> Maybe.withDefault currentState |> (label >> name) }))
     -- Move to the target
-    |> moveTowardsTarget config
+    |> moveTowardsTarget config (Just msg)
 
 
 {-| Move one node towards the target updating the model and running any actions
 -}
-moveTowardsTarget : Config msg model -> (model, Cmd msg) -> (model, Cmd msg)
-moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as config) ((model, cmd) as init) =
+moveTowardsTarget : Config msg model -> Maybe msg -> (model, Cmd msg) -> (model, Cmd msg)
+moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as config) maybeMsg ((model, cmd) as init) =
   let
     -- Get the current state from the model
     currentState : Zipper msg model
@@ -240,15 +240,23 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
               targetState
                 -- Get the starting state
                 |> (\state -> case label state of
-                  BranchStateConfig { name, startingState, hasHistory } ->
+                  BranchStateConfig config ->
                     let
+                      -- When choosing a start state, we either get it from history, from a local transition or from the default starting state
+                      actualStartingState =
+                        maybeMsg
+                          |> Maybe.andThen (\msg -> getTransitionState msg model statechart state)
+                          |> Maybe.map (label >> name)
+                          |> Maybe.andThen (\transitionStateName -> if transitionStateName == config.name then Nothing else Just transitionStateName) -- Don't allow self-transitions when choosing a child
+                          |> Maybe.withDefault config.startingState
+
                       stateNameToStartIn =
-                        if hasHistory then
+                        if config.hasHistory then
                           (getStateModel >> .history) model
-                            |> Dict.get name
-                            |> Maybe.withDefault startingState
+                            |> Dict.get config.name
+                            |> Maybe.withDefault actualStartingState
                         else
-                          startingState
+                          actualStartingState
                     in
                     Just <| unsafeFindState stateNameToStartIn statechart
 
@@ -265,7 +273,7 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
             -- We need to move one step down the tree (towards the target) and run the target's onEnter
             let
               writeHistoryAction : Zipper msg model -> Zipper msg model -> Action msg model
-              writeHistoryAction currentState parentState model =
+              writeHistoryAction currentState parentState = \_ model ->
                 ( updateStateModel (\m -> { m | history = Dict.insert ((label >> name) parentState) ((label >> name) currentState) m.history }) model
                 , []
                 )
@@ -298,15 +306,15 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
     Just { beforeAction, nextState, targetState, afterAction } ->
       init
         -- Apply the before action (this will be an onExit if we are moving up the tree)
-        |> applyAction update beforeAction
+        |> applyAction update beforeAction maybeMsg
         -- Log the transition we are about to do
-        |> \x -> let _ = Debug.log "State transition" (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState)) in x
+        |> \x -> let _ = Debug.log "State transition" (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState) ++ " [" ++ toString maybeMsg ++ "]") in x
         -- Update the model with the new nextState and targetState
         |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState, targetStateName = (label >> name) targetState }))
         -- Apply the after action (this will be an onEnter if we are moving down the tree)
-        |> applyAction update afterAction
+        |> applyAction update afterAction maybeMsg
         -- Continue moving towards the target by recursing back into this function
-        |> moveTowardsTarget config
+        |> moveTowardsTarget config maybeMsg
 
     Nothing ->
       init
@@ -314,8 +322,8 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
 
 {-| Move one node up the hierarchy updating the model and running any exit action (this is used in self-transitions)
 -}
-moveToParent : Config msg model -> (model, Cmd msg) -> (model, Cmd msg)
-moveToParent ({ statechart, update, getStateModel, updateStateModel } as config) ((model, cmd) as init) =
+moveToParent : Config msg model -> msg -> (model, Cmd msg) -> (model, Cmd msg)
+moveToParent ({ statechart, update, getStateModel, updateStateModel } as config) msg ((model, cmd) as init) =
   let
     -- Get the current state from the model
     currentState : Zipper msg model
@@ -335,7 +343,7 @@ moveToParent ({ statechart, update, getStateModel, updateStateModel } as config)
     Just { beforeAction, nextState } ->
       init
         -- Apply the before action (this will be an onExit if we are moving up the tree)
-        |> applyAction update beforeAction
+        |> applyAction update beforeAction (Just msg)
         -- Log the transition we are about to do
         |> \x -> let _ = Debug.log "State transition (moveToParent) " (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState)) in x
         -- Update the model with the new nextState and targetState
@@ -400,11 +408,12 @@ getTransitionState msg model statechart state =
 
 {-| Apply an action to a model/command tuple
 -}
-applyAction : (msg -> model -> (model, Cmd msg)) -> Action msg model -> (model, Cmd msg) -> (model, Cmd msg)
-applyAction update action (model, cmd) =
+
+applyAction : (msg -> model -> (model, Cmd msg)) -> Action msg model -> Maybe msg -> (model, Cmd msg) -> (model, Cmd msg)
+applyAction update action maybeMsg (model, cmd) =
   let
     (newModel, msgs) =
-      action model
+      action maybeMsg model -- TODO
   in
   newModel ! [ cmd ]
     |> Update.sequence update msgs
@@ -414,15 +423,15 @@ applyAction update action (model, cmd) =
 -}
 composeActions : Action msg model -> Action msg model -> Action msg model
 composeActions g f =
-  \m ->
+  \msg model ->
     let
-      (fM, fMsgs) =
-        f m
+      (fModel, fMsgs) =
+        f msg model
 
-      (gM, gMsgs) =
-        g fM
+      (gModel, gMsgs) =
+        g msg fModel
     in
-    (gM, fMsgs ++ gMsgs)
+    (gModel, fMsgs ++ gMsgs)
 
 
 {-| Turn a list of actions into a single action by composing them all

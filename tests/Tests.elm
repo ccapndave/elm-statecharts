@@ -28,8 +28,12 @@ stateNames =
   , c = "C"
   , on = "ON"
   , off = "OFF"
-  
+
   , top = "TOP"
+
+  , parent = "PARENT"
+  , child1 = "CHILD1"
+  , child2 = "CHILD2"
   }
 
 
@@ -52,7 +56,7 @@ flatStatechart =
       , transition = \msg _ -> case msg of
         StartStop -> Just stateNames.stopped
         otherwise -> Nothing
-      } 
+      }
   in
   mkStatechart stateNames.stopped [ stopped, running ]
 
@@ -60,25 +64,27 @@ flatStatechart =
 hierarchicalStatechart : Statechart Msg StateModel
 hierarchicalStatechart =
   let
-    stopped = mkState
-      { name = stateNames.stopped
-      , onEnter = noAction
-      , onExit = noAction
-      , transition = \msg _ -> case msg of
-        StartStop -> Just stateNames.running
-        otherwise -> Nothing
-      }
+    active =
+      let
+        stopped = mkState
+          { name = stateNames.stopped
+          , onEnter = noAction
+          , onExit = noAction
+          , transition = \msg _ -> case msg of
+            StartStop -> Just stateNames.running
+            otherwise -> Nothing
+          }
 
-    running = mkState
-      { name = stateNames.running
-      , onEnter = noAction
-      , onExit = noAction
-      , transition = \msg _ -> case msg of
-        StartStop -> Just stateNames.stopped
-        otherwise -> Nothing
-      } 
-
-    active = mkCompoundState
+        running = mkState
+          { name = stateNames.running
+          , onEnter = noAction
+          , onExit = noAction
+          , transition = \msg _ -> case msg of
+            StartStop -> Just stateNames.stopped
+            otherwise -> Nothing
+          }
+      in
+      mkCompoundState
       { name = stateNames.active
       , onEnter = noAction
       , onExit = noAction
@@ -89,7 +95,7 @@ hierarchicalStatechart =
       , hasHistory = False
       }
       [ stopped, running ]
-  in  
+  in
   mkStatechart stateNames.active [ active ]
 
 
@@ -122,7 +128,7 @@ historyStatechart =
         Next -> Just stateNames.a
         otherwise -> Nothing
       }
-    
+
     on = mkCompoundState
       { name = stateNames.on
       , onEnter = noAction
@@ -134,7 +140,7 @@ historyStatechart =
       , hasHistory = True
       }
       [ a, b, c ]
-    
+
     off = mkState
       { name = stateNames.off
       , onEnter = noAction
@@ -143,7 +149,7 @@ historyStatechart =
         On -> Just stateNames.on
         otherwise -> Nothing
       }
-  in  
+  in
   mkStatechart stateNames.off [ on, off ]
 
 
@@ -203,7 +209,7 @@ suite =
               |> start (config flatStatechart)
         in
         Expect.equal model.currentStateName stateNames.stopped
-      
+
       , test "Step" <| \_ ->
         let
           (model, cmd) =
@@ -212,7 +218,7 @@ suite =
               |> step (config flatStatechart) StartStop
         in
         Expect.equal model.currentStateName stateNames.running
-      
+
       , test "Multi-steps" <| \_ ->
         let
           (model, cmd) =
@@ -226,7 +232,7 @@ suite =
         in
         Expect.equal model.currentStateName stateNames.running
       ]
-    
+
     , describe "Hierarchical"
       [ test "Starting state" <| \_ ->
         let
@@ -235,7 +241,7 @@ suite =
               |> start (config hierarchicalStatechart)
         in
         Expect.equal model.currentStateName stateNames.stopped
-      
+
       , test "Step 1" <| \_ ->
         let
           (model, cmd) =
@@ -245,14 +251,14 @@ suite =
               |> step (config hierarchicalStatechart) Reset
         in
         Expect.equal model.currentStateName stateNames.stopped
-      
+
       , test "Step 2" <| \_ ->
         let
           (model, cmd) =
             empty ! []
               |> start (config hierarchicalStatechart)
               |> step (config hierarchicalStatechart) StartStop
-              |> step (config hierarchicalStatechart) StartStop 
+              |> step (config hierarchicalStatechart) StartStop
               |> step (config hierarchicalStatechart) Reset
         in
         Expect.equal model.currentStateName stateNames.stopped
@@ -270,7 +276,7 @@ suite =
 
     , describe "Actions" <|
       let
-        addOneAction model =
+        addOneAction msg model =
           ({ model | a = model.a + 1 }, [])
 
         actionStatechart : Statechart Msg { a : Int, stateModel : StateModel }
@@ -278,7 +284,7 @@ suite =
           let
             stopped = mkState
               { name = stateNames.stopped
-              , onEnter = \m -> (m, [ StartStop ]) -- this stopwatch should start running automatically
+              , onEnter = \msg model -> (model, [ StartStop ]) -- this stopwatch should start running automatically
               , onExit = addOneAction
               , transition = \msg _ -> case msg of
                 StartStop -> Just stateNames.running
@@ -293,7 +299,7 @@ suite =
                 StartStop -> Just stateNames.stopped
                 otherwise -> Nothing
               }
-          in  
+          in
           mkStatechart stateNames.stopped [ stopped, running ]
 
         actionConfig =
@@ -310,7 +316,7 @@ suite =
               |> start actionConfig
         in
         Expect.equal model.stateModel.currentStateName stateNames.running
-      
+
       , test "onExit" <| \_ ->
         let
           (model, cmd) =
@@ -319,7 +325,7 @@ suite =
         in
         Expect.equal model.a 3
       ]
-  
+
     , describe "Self transitions" <|
       let
         actionStatechart : Statechart Msg { enters : Int, exits : Int, stateModel : StateModel }
@@ -327,8 +333,8 @@ suite =
           let
             stopped = mkState
               { name = stateNames.stopped
-              , onEnter = \model -> ({ model | enters = model.enters + 1 }, [])
-              , onExit = \model -> ({ model | exits = model.exits + 1 }, [])
+              , onEnter = \msg model -> ({ model | enters = model.enters + 1 }, [])
+              , onExit = \msg model -> ({ model | exits = model.exits + 1 }, [])
               , transition = \msg _ -> case msg of
                 Reset -> Just stateNames.stopped
                 otherwise -> Nothing
@@ -360,8 +366,69 @@ suite =
         in
         Expect.equal { enters = model.enters, exits = model.exits } { enters = 10, exits = 9 }
       ]
-      
-    
+
+    , describe "Local transitions"
+      [ test "Starting state" <| \_ ->
+        let
+          localTransitionStatechart : Statechart Msg StateModel
+          localTransitionStatechart =
+            let
+              top = mkState
+                { name = stateNames.top
+                , onEnter = noAction
+                , onExit = noAction
+                , transition = \msg _ -> case msg of
+                  Next -> Just stateNames.parent
+                  otherwise -> Nothing
+                }
+
+              parent =
+                let
+                  child1 = mkState
+                    { name = stateNames.child1
+                    , onEnter = noAction
+                    , onExit = noAction
+                    , transition = \msg model -> Nothing
+                    }
+
+                  child2 = mkState
+                    { name = stateNames.child2
+                    , onEnter = noAction
+                    , onExit = noAction
+                    , transition = \msg model -> Nothing
+                    }
+                in
+                  mkCompoundState
+                  { name = stateNames.parent
+                  , onEnter = noAction
+                  , onExit = noAction
+                  , startingState = stateNames.child1
+                  , transition = \msg model -> case msg of
+                      Next -> Just stateNames.child2
+                      otherwise -> Nothing
+                  , hasHistory = False
+                  }
+                  [ child1
+                  , child2
+                  ]
+            in
+            mkStatechart stateNames.top [ top, parent ]
+
+          localTransitionConfig =
+            { statechart = localTransitionStatechart
+            , update = \msg model -> step localTransitionConfig msg (model, Cmd.none)
+            , getStateModel = identity
+            , updateStateModel = identity
+            }
+
+          (model, cmd) =
+            empty ! []
+              |> start localTransitionConfig
+              |> step localTransitionConfig Next
+        in
+        Expect.equal model.currentStateName stateNames.child2
+      ]
+
     , describe "History"
       [ test "Starting state" <| \_ ->
         let
@@ -370,7 +437,7 @@ suite =
               |> start (config historyStatechart)
         in
         Expect.equal model.currentStateName stateNames.off
-      
+
       , test "Step 1" <| \_ ->
         let
           (model, cmd) =
@@ -379,7 +446,7 @@ suite =
               |> step (config historyStatechart) On
         in
         Expect.equal model.currentStateName stateNames.a
-      
+
       , test "Step 2" <| \_ ->
         let
           (model, cmd) =
@@ -390,7 +457,7 @@ suite =
               |> step (config historyStatechart) Next
         in
         Expect.equal model.currentStateName stateNames.c
-      
+
       , test "Step 3" <| \_ ->
         let
           (model, cmd) =
@@ -402,7 +469,7 @@ suite =
               |> step (config historyStatechart) Off
         in
         Expect.equal model.currentStateName stateNames.off
-      
+
       , test "History 1" <| \_ ->
         let
           (model, cmd) =
@@ -415,7 +482,7 @@ suite =
               |> step (config historyStatechart) On
         in
         Expect.equal model.currentStateName stateNames.c
-      
+
       , test "History 2" <| \_ ->
         let
           (model, cmd) =
@@ -431,7 +498,7 @@ suite =
               |> step (config historyStatechart) On
         in
         Expect.equal model.currentStateName stateNames.a
-      
+
       , test "Starting history" <| \_ ->
         let
           startHistoryStatechart : Statechart Msg StateModel
@@ -439,7 +506,7 @@ suite =
             let
               top =
                 let
-                  on = 
+                  on =
                     let
                       a = mkState
                         { name = stateNames.a
@@ -479,7 +546,7 @@ suite =
                       , hasHistory = True
                       }
                     [ a, b, c ]
-                  
+
                   off = mkState
                     { name = stateNames.off
                     , onEnter = noAction
@@ -499,10 +566,10 @@ suite =
                   , startingState = stateNames.off
                   , hasHistory = True
                   }
-                  [ on, off ] 
+                  [ on, off ]
             in
             mkStatechart stateNames.top [ top ]
-          
+
           (model, cmd) =
             empty ! []
               |> start (config startHistoryStatechart)
