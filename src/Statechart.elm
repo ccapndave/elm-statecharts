@@ -328,7 +328,7 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
         -- Apply the before action (this will be an onExit if we are moving up the tree)
         |> applyAction update beforeAction maybeMsg
         -- Log the transition we are about to do
-        |> \x -> let _ = Debug.log "State transition" (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState) ++ " [" ++ toString maybeMsg ++ "]") in x
+        |> \x -> let _ = Debug.log "State transition" (((getStateModel >> .currentStateName) model) ++ " -> " ++ ((label >> name) nextState) {- ++ " [" ++ toString maybeMsg ++ "]" -}) in x
         -- Update the model with the new nextState and targetState
         |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState, targetStateName = (label >> name) targetState }))
         -- Apply the after action (this will be an onEnter if we are moving down the tree)
