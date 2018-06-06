@@ -60,7 +60,7 @@ type alias BaseStateConfig msg model a =
 
 
 type alias BranchStateConfig msg model = BaseStateConfig msg model
-  { startingState : String
+  { startingState : Statechart msg model
   , hasHistory : Bool
   }
 
@@ -113,7 +113,7 @@ encode model =
 
 {-| Make the top level statechart
 -}
-mkStatechart : String -> List (Statechart msg model) -> Statechart msg model
+mkStatechart : Statechart msg model -> List (Statechart msg model) -> Statechart msg model
 mkStatechart startingState states =
   mkCompoundState
     { name = ""
@@ -131,17 +131,21 @@ mkStatechart startingState states =
 mkCompoundState : BranchStateConfig msg model -> List (Statechart msg model) -> Statechart msg model
 mkCompoundState branchStateConfig states =
   let
+    -- Get the name of the starting state
+    startingState =
+      (Tree.label >> name) branchStateConfig.startingState
+
     -- We can do a little runtime check here to confirm that the starting state is a child of states
     isStartingStateChild =
       states
         |> List.map (Tree.label >> name)
-        |> List.filter ((==) branchStateConfig.startingState)
+        |> List.filter ((==) startingState)
         |> not << List.isEmpty
   in
   if isStartingStateChild then
     Tree.tree (BranchStateConfig branchStateConfig) states
   else
-    Debug.crash <| "The starting state '" ++ branchStateConfig.startingState ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
+    Debug.crash <| "The starting state '" ++ startingState ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
 
 
 {-| Make a state from a StateConfig
@@ -173,19 +177,27 @@ empty =
 start : Config msg model -> (model, Cmd msg) -> (model, Cmd msg)
 start ({ statechart, update, getStateModel, updateStateModel } as config) ((model, cmd) as init) =
   let
-    startingStateName =
+    -- startingStateName =
+    --   case Tree.label statechart of
+    --     BranchStateConfig { startingState } -> startingState
+    --     otherwise -> Debug.crash "This can't happen"
+    --
+    -- startingState =
+    --   unsafeFindState startingStateName statechart
+
+    startingState =
       case Tree.label statechart of
         BranchStateConfig { startingState } -> startingState
         otherwise -> Debug.crash "This can't happen"
 
-    startingState =
-      unsafeFindState startingStateName statechart
+    startingStateName =
+      (Tree.label >> name) startingState
   in
   init
     -- Update the model with the startingState
     |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
     -- In case the startingState isn't a compound state, we need to manually run any onEnter actions
-    |> \init -> if (List.isEmpty (children startingState)) then applyAction update ((label >> onEnter) startingState) Nothing init else init
+    |> \init -> if (List.isEmpty (Tree.children startingState)) then applyAction update ((Tree.label >> onEnter) startingState) Nothing init else init
     -- Kick off the state machine
     |> moveTowardsTarget config Nothing
 
@@ -264,7 +276,7 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                              )
 
                           -- finally fall back to the default starting states
-                          |> Maybe.withDefault config.startingState
+                          |> Maybe.withDefault ((Tree.label >> name) config.startingState)
                     in
                     Just <| unsafeFindState stateNameToStartIn statechart
 

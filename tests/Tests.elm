@@ -58,7 +58,7 @@ flatStatechart =
         otherwise -> Nothing
       }
   in
-  mkStatechart stateNames.stopped [ stopped, running ]
+  mkStatechart stopped [ stopped, running ]
 
 
 hierarchicalStatechart : Statechart Msg StateModel
@@ -91,12 +91,12 @@ hierarchicalStatechart =
       , transition = \msg _ -> case msg of
         Reset -> Just stateNames.active
         otherwise -> Nothing
-      , startingState = stateNames.stopped
+      , startingState = stopped
       , hasHistory = False
       }
       [ stopped, running ]
   in
-  mkStatechart stateNames.active [ active ]
+  mkStatechart active [ active ]
 
 
 historyStatechart : Statechart Msg StateModel
@@ -136,7 +136,7 @@ historyStatechart =
       , transition = \msg _ -> case msg of
         Off -> Just stateNames.off
         otherwise -> Nothing
-      , startingState = stateNames.a
+      , startingState = a
       , hasHistory = True
       }
       [ a, b, c ]
@@ -150,7 +150,7 @@ historyStatechart =
         otherwise -> Nothing
       }
   in
-  mkStatechart stateNames.off [ on, off ]
+  mkStatechart off [ on, off ]
 
 
 veryHierarchicalStatechart : Statechart Msg StateModel
@@ -171,7 +171,7 @@ veryHierarchicalStatechart =
             { name = stateNames.b
             , onEnter = noAction
             , onExit = noAction
-            , startingState = stateNames.c
+            , startingState = c
             , transition = \_ _ -> Nothing
             , hasHistory = False
             }
@@ -181,13 +181,13 @@ veryHierarchicalStatechart =
         { name = stateNames.a
         , onEnter = noAction
         , onExit = noAction
-        , startingState = stateNames.b
+        , startingState = b
         , transition = \_ _ -> Nothing
         , hasHistory = False
         }
         [ b ]
   in
-  mkStatechart stateNames.a [a]
+  mkStatechart a [a]
 
 
 config statechart =
@@ -300,7 +300,7 @@ suite =
                 otherwise -> Nothing
               }
           in
-          mkStatechart stateNames.stopped [ stopped, running ]
+          mkStatechart stopped [ stopped, running ]
 
         actionConfig =
           { statechart = actionStatechart
@@ -340,7 +340,7 @@ suite =
                 otherwise -> Nothing
               }
           in
-          mkStatechart stateNames.stopped [ stopped ]
+          mkStatechart stopped [ stopped ]
 
         actionConfig =
           { statechart = actionStatechart
@@ -402,7 +402,7 @@ suite =
                   { name = stateNames.parent
                   , onEnter = noAction
                   , onExit = noAction
-                  , startingState = stateNames.child1
+                  , startingState = child1
                   , transition = \msg model -> case msg of
                       Next -> Just stateNames.child2
                       otherwise -> Nothing
@@ -412,7 +412,7 @@ suite =
                   , child2
                   ]
             in
-            mkStatechart stateNames.top [ top, parent ]
+            mkStatechart top [ top, parent ]
 
           localTransitionConfig =
             { statechart = localTransitionStatechart
@@ -542,7 +542,7 @@ suite =
                       , transition = \msg _ -> case msg of
                         Off -> Just stateNames.off
                         otherwise -> Nothing
-                      , startingState = stateNames.a
+                      , startingState = a
                       , hasHistory = True
                       }
                     [ a, b, c ]
@@ -563,12 +563,12 @@ suite =
                   , transition = \msg _ -> case msg of
                     Off -> Just stateNames.off
                     otherwise -> Nothing
-                  , startingState = stateNames.off
+                  , startingState = off
                   , hasHistory = True
                   }
                   [ on, off ]
             in
-            mkStatechart stateNames.top [ top ]
+            mkStatechart top [ top ]
 
           (model, cmd) =
             empty ! []
