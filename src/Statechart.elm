@@ -1,17 +1,16 @@
-module Statechart
-    exposing
-        ( StateModel
-        , Statechart
-        , decoder
-        , empty
-        , encode
-        , mkCompoundState
-        , mkState
-        , mkStatechart
-        , noAction
-        , start
-        , step
-        )
+module Statechart exposing
+    ( Statechart
+    , StateModel
+    , decoder
+    , encode
+    , mkStatechart
+    , mkCompoundState
+    , mkState
+    , noAction
+    , empty
+    , start
+    , step
+    )
 
 {-| A pure Elm implementation of statecharts designed to hook direct;y into The Elm Architecture
 update function.
@@ -31,10 +30,9 @@ update function.
 -}
 
 import Dict exposing (Dict)
-import Json.Decode as JD exposing (Decoder, field)
-import Json.Decode.Pipeline exposing (custom, decode, hardcoded, optional, required)
+import Json.Decode as JD exposing (Decoder, field, succeed)
+import Json.Decode.Pipeline exposing (custom, hardcoded, optional, required)
 import Json.Encode as JE exposing (Value)
-import Json.Encode.Extra
 import Maybe.Extra as Maybe
 import Tree exposing (Tree, singleton)
 import Tree.Zipper exposing (children, findFromRoot, firstChild, fromTree, label, nextSibling, parent, tree)
@@ -100,7 +98,7 @@ type alias StateModel =
 -}
 decoder : Decoder StateModel
 decoder =
-    decode StateModel
+    succeed StateModel
         |> required "currentStateName" JD.string
         |> required "targetStateName" JD.string
         |> required "history" (JD.dict JD.string)
@@ -113,7 +111,7 @@ encode model =
     JE.object
         [ ( "currentStateName", JE.string model.currentStateName )
         , ( "targetStateName", JE.string model.targetStateName )
-        , ( "history", Json.Encode.Extra.dict identity JE.string model.history )
+        , ( "history", JE.dict identity JE.string model.history )
         ]
 
 
@@ -151,6 +149,7 @@ mkCompoundState branchStateConfig states =
     in
     if isStartingStateChild then
         Tree.tree (BranchStateConfig branchStateConfig) states
+
     else
         Debug.crash <| "The starting state '" ++ startingState ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
 
@@ -186,8 +185,8 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) (( mod
     let
         startingState =
             case Tree.label statechart of
-                BranchStateConfig { startingState } ->
-                    startingState
+                BranchStateConfig branchStateConfig ->
+                    branchStateConfig.startingState
 
                 otherwise ->
                     Debug.crash "This can't happen"
@@ -202,6 +201,7 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) (( mod
         |> (\init ->
                 if List.isEmpty (Tree.children startingState) then
                     applyAction update ((Tree.label >> onEnter) startingState) Nothing init
+
                 else
                     init
                         -- Kick off the state machine
@@ -232,6 +232,7 @@ step ({ statechart, update, getStateModel, updateStateModel } as config) msg (( 
         |> (\i ->
                 if isSelfTransition then
                     moveToParent config msg i
+
                 else
                     i
            )
@@ -260,13 +261,14 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                             if List.isEmpty (children currentState) then
                                 -- If we have no children we are done and there is no next state
                                 Nothing
+
                             else
                                 -- If this is a compound state then we need to go to its starting state (as we can't end in a compound state)
                                 targetState
                                     -- Get the starting state
                                     |> (\state ->
                                             case label state of
-                                                BranchStateConfig config ->
+                                                BranchStateConfig branchStateConfig ->
                                                     let
                                                         -- Choosing a starting state uses the following algorithm:
                                                         --  - a local transition always takes priority
@@ -279,21 +281,23 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                                                                 |> Maybe.map (label >> name)
                                                                 |> Maybe.andThen
                                                                     (\transitionStateName ->
-                                                                        if transitionStateName == config.name then
+                                                                        if transitionStateName == branchStateConfig.name then
                                                                             Nothing
+
                                                                         else
                                                                             Just transitionStateName
                                                                     )
                                                                 -- then try history
                                                                 |> Maybe.or
-                                                                    (if config.hasHistory then
+                                                                    (if branchStateConfig.hasHistory then
                                                                         (getStateModel >> .history) model
-                                                                            |> Dict.get config.name
+                                                                            |> Dict.get branchStateConfig.name
+
                                                                      else
                                                                         Nothing
                                                                     )
                                                                 -- finally fall back to the default starting states
-                                                                |> Maybe.withDefault ((Tree.label >> name) config.startingState)
+                                                                |> Maybe.withDefault ((Tree.label >> name) branchStateConfig.startingState)
                                                     in
                                                     Just <| unsafeFindState stateNameToStartIn statechart
 
@@ -301,6 +305,7 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                                                     Debug.crash "The builder functions shouldn't ever allow this to occur"
                                        )
                             -- TODO: check that the starting state isn't the same as the targetState (as this would cause an infinite loop)
+
                         else
                             Just targetState
                    )
@@ -310,9 +315,9 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                             -- We need to move one step down the tree (towards the target) and run the target's onEnter
                             let
                                 writeHistoryAction : Zipper msg model -> Zipper msg model -> Action msg model
-                                writeHistoryAction currentState parentState =
-                                    \_ model ->
-                                        ( updateStateModel (\m -> { m | history = Dict.insert ((label >> name) parentState) ((label >> name) currentState) m.history }) model
+                                writeHistoryAction state parentState =
+                                    \_ modelToUpdate ->
+                                        ( updateStateModel (\m -> { m | history = Dict.insert ((label >> name) parentState) ((label >> name) state) m.history }) modelToUpdate
                                         , []
                                         )
                             in
@@ -330,6 +335,7 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                                                 ]
                                         }
                                     )
+
                         else
                             -- We need to move one step up the tree and run the current node's onExit
                             parent currentState
@@ -435,6 +441,7 @@ contains : Statechart msg model -> Statechart msg model -> Bool
 contains child parent =
     if (Tree.label >> name) child == (Tree.label >> name) parent then
         True
+
     else
         case Tree.children parent of
             [] ->
@@ -450,6 +457,7 @@ findSiblingContainingChild : Zipper msg model -> Zipper msg model -> Maybe (Zipp
 findSiblingContainingChild child currentSibling =
     if child == currentSibling || contains (tree child) (tree currentSibling) then
         Just currentSibling
+
     else
         currentSibling
             |> nextSibling
@@ -461,8 +469,8 @@ findSiblingContainingChild child currentSibling =
 getTransitionState : msg -> model -> Statechart msg model -> Zipper msg model -> Maybe (Zipper msg model)
 getTransitionState msg model statechart state =
     case (label >> transition) state msg model of
-        Just name ->
-            Just <| unsafeFindState name statechart
+        Just stateName ->
+            Just <| unsafeFindState stateName statechart
 
         Nothing ->
             state
@@ -480,8 +488,9 @@ applyAction update action maybeMsg ( model, cmd ) =
 
         -- TODO
     in
-    newModel
-        ! [ cmd ]
+    ( newModel
+    , cmd
+    )
         |> Update.sequence update msgs
 
 
@@ -512,11 +521,11 @@ sequenceActions actions =
 name : StateConfig msg model -> String
 name stateConfig =
     case stateConfig of
-        BranchStateConfig { name } ->
-            name
+        BranchStateConfig branchStateConfig ->
+            branchStateConfig.name
 
-        LeafStateConfig { name } ->
-            name
+        LeafStateConfig leafStateConfig ->
+            leafStateConfig.name
 
 
 {-| Get the state's onEnter from the config
@@ -524,11 +533,11 @@ name stateConfig =
 onEnter : StateConfig msg model -> Action msg model
 onEnter stateConfig =
     case stateConfig of
-        BranchStateConfig { onEnter } ->
-            onEnter
+        BranchStateConfig branchStateConfig ->
+            branchStateConfig.onEnter
 
-        LeafStateConfig { onEnter } ->
-            onEnter
+        LeafStateConfig leafStateConfig ->
+            leafStateConfig.onEnter
 
 
 {-| Get the state's onExit from the config
@@ -536,11 +545,11 @@ onEnter stateConfig =
 onExit : StateConfig msg model -> Action msg model
 onExit stateConfig =
     case stateConfig of
-        BranchStateConfig { onExit } ->
-            onExit
+        BranchStateConfig branchStateConfig ->
+            branchStateConfig.onExit
 
-        LeafStateConfig { onExit } ->
-            onExit
+        LeafStateConfig leafStateConfig ->
+            leafStateConfig.onExit
 
 
 {-| Get the state's transition from the config
@@ -548,8 +557,8 @@ onExit stateConfig =
 transition : StateConfig msg model -> msg -> model -> Maybe String
 transition stateConfig =
     case stateConfig of
-        BranchStateConfig { transition } ->
-            transition
+        BranchStateConfig branchStateConfig ->
+            branchStateConfig.transition
 
-        LeafStateConfig { transition } ->
-            transition
+        LeafStateConfig leafStateConfig ->
+            leafStateConfig.transition

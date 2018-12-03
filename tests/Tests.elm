@@ -1,4 +1,4 @@
-module Tests exposing (..)
+module Tests exposing (Msg(..), config, flatStatechart, hierarchicalStatechart, historyStatechart, stateNames, suite, veryHierarchicalStatechart)
 
 import Dict
 import Expect exposing (Expectation)
