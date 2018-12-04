@@ -365,10 +365,6 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                                     |> applyAction update beforeAction maybeMsg
                                     -- Log the transition we are about to do
                                     |> (\x ->
-                                            let
-                                                _ =
-                                                    Debug.log "State transition" ((getStateModel >> .currentStateName) model ++ " -> " ++ (label >> name) nextState {- ++ " [" ++ toString maybeMsg ++ "]" -})
-                                            in
                                             x
                                                 -- Update the model with the new nextState and targetState
                                                 |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState, targetStateName = (label >> name) targetState }))
@@ -413,16 +409,8 @@ moveToParent ({ statechart, update, getStateModel, updateStateModel } as config)
                         init
                             -- Apply the before action (this will be an onExit if we are moving up the tree)
                             |> applyAction update beforeAction (Just msg)
-                            -- Log the transition we are about to do
-                            |> (\x ->
-                                    let
-                                        _ =
-                                            Debug.log "State transition (moveToParent) " ((getStateModel >> .currentStateName) model ++ " -> " ++ (label >> name) nextState)
-                                    in
-                                    x
-                                        -- Update the model with the new nextState and targetState
-                                        |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState }))
-                               )
+                            -- Update the model with the new nextState and targetState
+                            |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState }))
 
                     Nothing ->
                         init
