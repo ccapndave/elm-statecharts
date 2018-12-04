@@ -12,7 +12,7 @@ module Statechart exposing
     , step
     )
 
-{-| A pure Elm implementation of statecharts designed to hook direct;y into The Elm Architecture
+{-| A pure Elm implementation of statecharts designed to hook directy into The Elm Architecture
 update function.
 
 @docs Statechart
@@ -94,6 +94,14 @@ type alias StateModel =
     }
 
 
+type alias ActionsAndStates msg model =
+    { beforeAction : Action msg model
+    , nextState : Zipper msg model
+    , targetState : Zipper msg model
+    , afterAction : Action msg model
+    }
+
+
 {-| Decode a stored StateModel.
 -}
 decoder : Decoder StateModel
@@ -117,7 +125,7 @@ encode model =
 
 {-| Make the top level statechart
 -}
-mkStatechart : Statechart msg model -> List (Statechart msg model) -> Statechart msg model
+mkStatechart : Statechart msg model -> List (Statechart msg model) -> Result String (Statechart msg model)
 mkStatechart startingState states =
     mkCompoundState
         { name = ""
@@ -132,26 +140,26 @@ mkStatechart startingState states =
 
 {-| Make a compound state from a StateConfig
 -}
-mkCompoundState : BranchStateConfig msg model -> List (Statechart msg model) -> Statechart msg model
+mkCompoundState : BranchStateConfig msg model -> List (Statechart msg model) -> Result String (Statechart msg model)
 mkCompoundState branchStateConfig states =
     let
         -- Get the name of the starting state
-        startingState =
+        startingStateName : String
+        startingStateName =
             (Tree.label >> name) branchStateConfig.startingState
 
         -- We can do a little runtime check here to confirm that the starting state is a child of states
         isStartingStateChild =
             states
                 |> List.map (Tree.label >> name)
-                |> List.filter ((==) startingState)
-                |> not
-                << List.isEmpty
+                |> List.filter ((==) startingStateName)
+                |> (not << List.isEmpty)
     in
     if isStartingStateChild then
-        Tree.tree (BranchStateConfig branchStateConfig) states
+        Ok <| Tree.tree (BranchStateConfig branchStateConfig) states
 
     else
-        Debug.crash <| "The starting state '" ++ startingState ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
+        Err <| "The starting state '" ++ startingStateName ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
 
 
 {-| Make a state from a StateConfig
@@ -180,87 +188,83 @@ empty =
 
 {-| Start the statechart based on the StateModel.
 -}
-start : Config msg model -> ( model, Cmd msg ) -> ( model, Cmd msg )
+start : Config msg model -> ( model, Cmd msg ) -> Result String ( model, Cmd msg )
 start ({ statechart, update, getStateModel, updateStateModel } as config) (( model, cmd ) as init) =
-    let
-        startingState =
-            case Tree.label statechart of
-                BranchStateConfig branchStateConfig ->
+    case Tree.label statechart of
+        BranchStateConfig branchStateConfig ->
+            let
+                startingState : Statechart msg model
+                startingState =
                     branchStateConfig.startingState
 
-                otherwise ->
-                    Debug.crash "This can't happen"
+                startingStateName : String
+                startingStateName =
+                    (Tree.label >> name) startingState
+            in
+            init
+                -- Update the model with the startingState
+                |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
+                -- In case the startingState isn't a compound state, we need to manually run any onEnter actions
+                |> (\updatedInit ->
+                        if List.isEmpty (Tree.children startingState) then
+                            Ok <| applyAction update ((Tree.label >> onEnter) startingState) Nothing updatedInit
 
-        startingStateName =
-            (Tree.label >> name) startingState
-    in
-    init
-        -- Update the model with the startingState
-        |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
-        -- In case the startingState isn't a compound state, we need to manually run any onEnter actions
-        |> (\init ->
-                if List.isEmpty (Tree.children startingState) then
-                    applyAction update ((Tree.label >> onEnter) startingState) Nothing init
+                        else
+                            init
+                                -- Kick off the state machine
+                                |> moveTowardsTarget config Nothing
+                   )
 
-                else
-                    init
-                        -- Kick off the state machine
-                        |> moveTowardsTarget config Nothing
-           )
+        otherwise ->
+            Err "(Impossible) the starting state was a leaf"
 
 
 {-| Step through the statechart in response to an incoming message.
 -}
-step : Config msg model -> msg -> ( model, Cmd msg ) -> ( model, Cmd msg )
+step : Config msg model -> msg -> ( model, Cmd msg ) -> Result String ( model, Cmd msg )
 step ({ statechart, update, getStateModel, updateStateModel } as config) msg (( model, cmd ) as init) =
-    let
-        -- Get the current state from the model
-        currentState : Zipper msg model
-        currentState =
-            unsafeFindState ((getStateModel >> .currentStateName) model) statechart
+    findState ((getStateModel >> .currentStateName) model) statechart
+        |> Result.andThen
+            (\currentState ->
+                let
+                    -- Find the next state using the transition functions, if there is one
+                    maybeTargetState : Maybe (Zipper msg model)
+                    maybeTargetState =
+                        getTransitionState msg model statechart currentState
 
-        -- Find the next state using the transition functions, if there is one
-        maybeTargetState : Maybe (Zipper msg model)
-        maybeTargetState =
-            getTransitionState msg model statechart currentState
+                    isSelfTransition : Bool
+                    isSelfTransition =
+                        maybeTargetState == Just currentState
+                in
+                init
+                    |> (\i ->
+                            if isSelfTransition then
+                                moveToParent config msg i
 
-        isSelfTransition : Bool
-        isSelfTransition =
-            maybeTargetState == Just currentState
-    in
-    init
-        |> (\i ->
-                if isSelfTransition then
-                    moveToParent config msg i
-
-                else
-                    i
-           )
-        -- Update the model with the new targetState
-        |> Update.updateModel (updateStateModel (\m -> { m | targetStateName = maybeTargetState |> Maybe.withDefault currentState |> (label >> name) }))
-        -- Move to the target
-        |> moveTowardsTarget config (Just msg)
+                            else
+                                Ok i
+                       )
+                    -- Update the model with the new targetState
+                    |> Result.map (Update.updateModel (updateStateModel (\m -> { m | targetStateName = maybeTargetState |> Maybe.withDefault currentState |> (label >> name) })))
+                    -- Move to the target
+                    |> Result.andThen (moveTowardsTarget config (Just msg))
+            )
 
 
 {-| Move one node towards the target updating the model and running any actions
 -}
-moveTowardsTarget : Config msg model -> Maybe msg -> ( model, Cmd msg ) -> ( model, Cmd msg )
+moveTowardsTarget : Config msg model -> Maybe msg -> ( model, Cmd msg ) -> Result String ( model, Cmd msg )
 moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as config) maybeMsg (( model, cmd ) as init) =
-    let
-        -- Get the current state from the model
-        currentState : Zipper msg model
-        currentState =
-            unsafeFindState ((getStateModel >> .currentStateName) model) statechart
-
-        -- Calculate the next step to go to, and determine any actions to run around the state change
-        result : Maybe { beforeAction : Action msg model, nextState : Zipper msg model, targetState : Zipper msg model, afterAction : Action msg model }
-        result =
-            unsafeFindState ((getStateModel >> .targetStateName) model) statechart
-                |> (\targetState ->
+    findState ((getStateModel >> .currentStateName) model) statechart
+        |> Result.andThen
+            (\currentState ->
+                let
+                    chooseNextState : Zipper msg model -> Result String (Maybe (Zipper msg model))
+                    chooseNextState targetState =
                         if currentState == targetState then
                             if List.isEmpty (children currentState) then
                                 -- If we have no children we are done and there is no next state
-                                Nothing
+                                Ok Nothing
 
                             else
                                 -- If this is a compound state then we need to go to its starting state (as we can't end in a compound state)
@@ -299,25 +303,26 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                                                                 -- finally fall back to the default starting states
                                                                 |> Maybe.withDefault ((Tree.label >> name) branchStateConfig.startingState)
                                                     in
-                                                    Just <| unsafeFindState stateNameToStartIn statechart
+                                                    findState stateNameToStartIn statechart
+                                                        |> Result.map Just
 
                                                 LeafStateConfig _ ->
-                                                    Debug.crash "The builder functions shouldn't ever allow this to occur"
+                                                    Err "The builder functions shouldn't ever allow this to occur"
                                        )
                             -- TODO: check that the starting state isn't the same as the targetState (as this would cause an infinite loop)
 
                         else
-                            Just targetState
-                   )
-                |> Maybe.andThen
-                    (\targetState ->
+                            Ok (Just targetState)
+
+                    calculateActionsAndStates : Zipper msg model -> Maybe (ActionsAndStates msg model)
+                    calculateActionsAndStates targetState =
                         if contains (tree targetState) (tree currentState) then
                             -- We need to move one step down the tree (towards the target) and run the target's onEnter
                             let
                                 writeHistoryAction : Zipper msg model -> Zipper msg model -> Action msg model
-                                writeHistoryAction state parentState =
+                                writeHistoryAction state compoundState =
                                     \_ modelToUpdate ->
-                                        ( updateStateModel (\m -> { m | history = Dict.insert ((label >> name) parentState) ((label >> name) state) m.history }) modelToUpdate
+                                        ( updateStateModel (\m -> { m | history = Dict.insert ((label >> name) compoundState) ((label >> name) state) m.history }) modelToUpdate
                                         , []
                                         )
                             in
@@ -350,89 +355,87 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                                         , afterAction = noAction
                                         }
                                     )
-                    )
-    in
-    case result of
-        Just { beforeAction, nextState, targetState, afterAction } ->
-            init
-                -- Apply the before action (this will be an onExit if we are moving up the tree)
-                |> applyAction update beforeAction maybeMsg
-                -- Log the transition we are about to do
-                |> (\x ->
-                        let
-                            _ =
-                                Debug.log "State transition" ((getStateModel >> .currentStateName) model ++ " -> " ++ (label >> name) nextState {- ++ " [" ++ toString maybeMsg ++ "]" -})
-                        in
-                        x
-                            -- Update the model with the new nextState and targetState
-                            |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState, targetStateName = (label >> name) targetState }))
-                            -- Apply the after action (this will be an onEnter if we are moving down the tree)
-                            |> applyAction update afterAction maybeMsg
-                            -- Continue moving towards the target by recursing back into this function
-                            |> moveTowardsTarget config maybeMsg
-                   )
 
-        Nothing ->
-            init
+                    performActionsAndState : Maybe (ActionsAndStates msg model) -> Result String ( model, Cmd msg )
+                    performActionsAndState actionsAndStates =
+                        case actionsAndStates of
+                            Just { beforeAction, nextState, targetState, afterAction } ->
+                                init
+                                    -- Apply the before action (this will be an onExit if we are moving up the tree)
+                                    |> applyAction update beforeAction maybeMsg
+                                    -- Log the transition we are about to do
+                                    |> (\x ->
+                                            let
+                                                _ =
+                                                    Debug.log "State transition" ((getStateModel >> .currentStateName) model ++ " -> " ++ (label >> name) nextState {- ++ " [" ++ toString maybeMsg ++ "]" -})
+                                            in
+                                            x
+                                                -- Update the model with the new nextState and targetState
+                                                |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState, targetStateName = (label >> name) targetState }))
+                                                -- Apply the after action (this will be an onEnter if we are moving down the tree)
+                                                |> applyAction update afterAction maybeMsg
+                                                -- Continue moving towards the target by recursing back into this function
+                                                |> moveTowardsTarget config maybeMsg
+                                       )
+
+                            Nothing ->
+                                Ok init
+                in
+                findState ((getStateModel >> .targetStateName) model) statechart
+                    |> Result.andThen chooseNextState
+                    |> Result.map (Maybe.andThen calculateActionsAndStates)
+                    |> Result.andThen performActionsAndState
+            )
 
 
 {-| Move one node up the hierarchy updating the model and running any exit action (this is used in self-transitions)
 -}
-moveToParent : Config msg model -> msg -> ( model, Cmd msg ) -> ( model, Cmd msg )
+moveToParent : Config msg model -> msg -> ( model, Cmd msg ) -> Result String ( model, Cmd msg )
 moveToParent ({ statechart, update, getStateModel, updateStateModel } as config) msg (( model, cmd ) as init) =
-    let
-        -- Get the current state from the model
-        currentState : Zipper msg model
-        currentState =
-            unsafeFindState ((getStateModel >> .currentStateName) model) statechart
+    findState ((getStateModel >> .currentStateName) model) statechart
+        |> Result.map
+            (\currentState ->
+                let
+                    result =
+                        parent currentState
+                            |> Maybe.map
+                                (\state ->
+                                    { beforeAction =
+                                        sequenceActions
+                                            [ (label >> onExit) currentState
+                                            ]
+                                    , nextState = state
+                                    }
+                                )
+                in
+                case result of
+                    Just { beforeAction, nextState } ->
+                        init
+                            -- Apply the before action (this will be an onExit if we are moving up the tree)
+                            |> applyAction update beforeAction (Just msg)
+                            -- Log the transition we are about to do
+                            |> (\x ->
+                                    let
+                                        _ =
+                                            Debug.log "State transition (moveToParent) " ((getStateModel >> .currentStateName) model ++ " -> " ++ (label >> name) nextState)
+                                    in
+                                    x
+                                        -- Update the model with the new nextState and targetState
+                                        |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState }))
+                               )
 
-        result =
-            parent currentState
-                |> Maybe.map
-                    (\state ->
-                        { beforeAction =
-                            sequenceActions
-                                [ (label >> onExit) currentState
-                                ]
-                        , nextState = state
-                        }
-                    )
-    in
-    case result of
-        Just { beforeAction, nextState } ->
-            init
-                -- Apply the before action (this will be an onExit if we are moving up the tree)
-                |> applyAction update beforeAction (Just msg)
-                -- Log the transition we are about to do
-                |> (\x ->
-                        let
-                            _ =
-                                Debug.log "State transition (moveToParent) " ((getStateModel >> .currentStateName) model ++ " -> " ++ (label >> name) nextState)
-                        in
-                        x
-                            -- Update the model with the new nextState and targetState
-                            |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState }))
-                   )
-
-        Nothing ->
-            init
+                    Nothing ->
+                        init
+            )
 
 
 {-| -}
-unsafeFindState : String -> Statechart msg model -> Zipper msg model
-unsafeFindState nameToFind statechart =
-    let
-        zipper =
-            statechart
-                |> fromTree
-                |> findFromRoot (\stateConfig -> name stateConfig == nameToFind)
-    in
-    case zipper of
-        Just z ->
-            z
-
-        Nothing ->
-            Debug.crash <| "Attempt to transition to non-existent state " ++ nameToFind ++ ".  Check your statechart and transitions!"
+findState : String -> Statechart msg model -> Result String (Zipper msg model)
+findState nameToFind statechart =
+    statechart
+        |> fromTree
+        |> findFromRoot (\stateConfig -> name stateConfig == nameToFind)
+        |> Result.fromMaybe ("Attempt to find non-existent state " ++ nameToFind ++ ".  Check your statechart and transitions!")
 
 
 {-| Helper function to say whether or not a parent contains a child
@@ -470,7 +473,7 @@ getTransitionState : msg -> model -> Statechart msg model -> Zipper msg model ->
 getTransitionState msg model statechart state =
     case (label >> transition) state msg model of
         Just stateName ->
-            Just <| unsafeFindState stateName statechart
+            Result.toMaybe <| findState stateName statechart
 
         Nothing ->
             state
@@ -485,8 +488,6 @@ applyAction update action maybeMsg ( model, cmd ) =
     let
         ( newModel, msgs ) =
             action maybeMsg model
-
-        -- TODO
     in
     ( newModel
     , cmd
