@@ -125,7 +125,7 @@ encode model =
 
 {-| Make the top level statechart
 -}
-mkStatechart : Statechart msg model -> List (Statechart msg model) -> Result String (Statechart msg model)
+mkStatechart : Statechart msg model -> List (Statechart msg model) -> Statechart msg model
 mkStatechart startingState states =
     mkCompoundState
         { name = ""
@@ -140,26 +140,15 @@ mkStatechart startingState states =
 
 {-| Make a compound state from a StateConfig
 -}
-mkCompoundState : BranchStateConfig msg model -> List (Statechart msg model) -> Result String (Statechart msg model)
+mkCompoundState : BranchStateConfig msg model -> List (Statechart msg model) -> Statechart msg model
 mkCompoundState branchStateConfig states =
     let
         -- Get the name of the starting state
         startingStateName : String
         startingStateName =
             (Tree.label >> name) branchStateConfig.startingState
-
-        -- We can do a little runtime check here to confirm that the starting state is a child of states
-        isStartingStateChild =
-            states
-                |> List.map (Tree.label >> name)
-                |> List.filter ((==) startingStateName)
-                |> (not << List.isEmpty)
     in
-    if isStartingStateChild then
-        Ok <| Tree.tree (BranchStateConfig branchStateConfig) states
-
-    else
-        Err <| "The starting state '" ++ startingStateName ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
+    Tree.tree (BranchStateConfig branchStateConfig) states
 
 
 {-| Make a state from a StateConfig
@@ -200,20 +189,31 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) (( mod
                 startingStateName : String
                 startingStateName =
                     (Tree.label >> name) startingState
-            in
-            init
-                -- Update the model with the startingState
-                |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
-                -- In case the startingState isn't a compound state, we need to manually run any onEnter actions
-                |> (\updatedInit ->
-                        if List.isEmpty (Tree.children startingState) then
-                            Ok <| applyAction update ((Tree.label >> onEnter) startingState) Nothing updatedInit
 
-                        else
-                            init
-                                -- Kick off the state machine
-                                |> moveTowardsTarget config Nothing
-                   )
+                isStartingStateChild : Bool
+                isStartingStateChild =
+                    Tree.children statechart
+                        |> List.map (Tree.label >> name)
+                        |> List.filter ((==) startingStateName)
+                        |> (not << List.isEmpty)
+            in
+            if isStartingStateChild then
+                init
+                    -- Update the model with the startingState
+                    |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = startingStateName, targetStateName = startingStateName }))
+                    -- In case the startingState isn't a compound state, we need to manually run any onEnter actions
+                    |> (\updatedInit ->
+                            if List.isEmpty (Tree.children startingState) then
+                                Ok <| applyAction update ((Tree.label >> onEnter) startingState) Nothing updatedInit
+
+                            else
+                                init
+                                    -- Kick off the state machine
+                                    |> moveTowardsTarget config Nothing
+                       )
+
+            else
+                Err <| "The starting state '" ++ startingStateName ++ "' is not a child of '" ++ branchStateConfig.name ++ "'"
 
         otherwise ->
             Err "(Impossible) the starting state was a leaf"
