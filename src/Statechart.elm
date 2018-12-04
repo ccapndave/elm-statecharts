@@ -175,7 +175,7 @@ empty =
     }
 
 
-{-| Start the statechart based on the StateModel.
+{-| Start the statechart in its starting state. This can fail in the case of a badly configured statechart.
 -}
 start : Config msg model -> ( model, Cmd msg ) -> Result String ( model, Cmd msg )
 start ({ statechart, update, getStateModel, updateStateModel } as config) (( model, cmd ) as init) =
@@ -219,7 +219,7 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) (( mod
             Err "(Impossible) the starting state was a leaf"
 
 
-{-| Step through the statechart in response to an incoming message.
+{-| Step through the statechart in response to an incoming message. This can fail in the case of non-existant state names.
 -}
 step : Config msg model -> msg -> ( model, Cmd msg ) -> Result String ( model, Cmd msg )
 step ({ statechart, update, getStateModel, updateStateModel } as config) msg (( model, cmd ) as init) =
