@@ -207,7 +207,7 @@ start ({ statechart, update, getStateModel, updateStateModel } as config) (( mod
                                 Ok <| applyAction update ((Tree.label >> onEnter) startingState) Nothing updatedInit
 
                             else
-                                init
+                                updatedInit
                                     -- Kick off the state machine
                                     |> moveTowardsTarget config Nothing
                        )
@@ -365,6 +365,10 @@ moveTowardsTarget ({ statechart, update, getStateModel, updateStateModel } as co
                                     |> applyAction update beforeAction maybeMsg
                                     -- Log the transition we are about to do
                                     |> (\x ->
+                                            -- let
+                                            --     _ =
+                                            --         Debug.log "State transition" ((getStateModel >> .currentStateName) model ++ " -> " ++ (label >> name) nextState {- ++ " [" ++ toString maybeMsg ++ "]" -})
+                                            -- in
                                             x
                                                 -- Update the model with the new nextState and targetState
                                                 |> Update.updateModel (updateStateModel (\m -> { m | currentStateName = (label >> name) nextState, targetStateName = (label >> name) targetState }))
